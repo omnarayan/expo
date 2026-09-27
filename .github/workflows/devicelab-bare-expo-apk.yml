@@ -1,0 +1,83 @@
+# DeviceLab: build bare-expo release APKs (arm64-v8a + x86_64) at expo/expo@d604db1.
+# Mirrors the `android-build` job of .github/workflows/test-suite.yml, minus
+# fingerprint/repack, TURBO_TOKEN, and Slack notifications.
+name: DeviceLab bare-expo APK
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [devicelab-build-d604db1]
+    paths:
+      - .github/workflows/devicelab-bare-expo-apk.yml
+
+permissions:
+  contents: read
+
+jobs:
+  android-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64-v8a, x86_64]
+    env:
+      ORG_GRADLE_PROJECT_reactNativeArchitectures: ${{ matrix.arch }}
+      GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xmx4096m -XX:MaxMetaspaceSize=4096m"
+    steps:
+      - name: 👀 Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: 🧹 Cleanup GitHub Linux runner disk space
+        uses: ./.github/actions/cleanup-linux-disk-space
+      - name: 🏗️ Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.x
+      - name: 🔨 Use JDK 17
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Setup ccache
+        uses: ./.github/actions/setup-ccache
+      - name: ➕ Add `bin` to GITHUB_PATH
+        run: echo "$(pwd)/bin" >> $GITHUB_PATH
+      - name: 🔨 Install pnpm
+        uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        with:
+          install: false
+      - name: 🔨 Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: 'pnpm'
+      - name: ♻️ Restore caches
+        uses: ./.github/actions/expo-caches
+        id: expo-caches
+        with:
+          ccache: 'true'
+          gradle: 'true'
+          react-native-gradle-downloads: 'true'
+      - name: Reset ccache stats
+        run: ccache -z
+      - name: 📦 Install node modules
+        run: pnpm install --frozen-lockfile
+      - name: ⚛️ Display React Native config
+        run: pnpm expo-modules-autolinking react-native-config --platform android
+        working-directory: apps/bare-expo
+      - name: 🏗️ Build Android project (bare-expo, ${{ matrix.arch }})
+        working-directory: apps/bare-expo
+        env:
+          EXPO_DEBUG: 1
+          NODE_ENV: production
+          EXPO_ROUTER_DISABLE_RN_NAVIGATION_CHECK: 1
+        run: ./scripts/start-android-e2e-test.ts --build
+      - name: Show ccache stats
+        if: always()
+        run: ccache -s -v
+      - name: 📤 Upload APK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bare-expo-android-${{ matrix.arch }}
+          path: apps/bare-expo/android/app/build/outputs/apk/release/
+          if-no-files-found: error
